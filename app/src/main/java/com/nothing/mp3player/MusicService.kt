@@ -49,9 +49,9 @@ class MusicService : MediaSessionService() {
             startIndex: Int,
             startPositionMs: Long,
         ): com.google.common.util.concurrent.ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
-            player.setMediaItems(mediaItems, startIndex, startPositionMs)
+            val future = super.onSetMediaItems(mediaSession, controller, mediaItems, startIndex, startPositionMs)
             player.prepare()
-            return super.onSetMediaItems(mediaSession, controller, mediaItems, startIndex, startPositionMs)
+            return future
         }
     }
 

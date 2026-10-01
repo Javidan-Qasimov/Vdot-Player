@@ -196,27 +196,36 @@ class MainActivity : ComponentActivity() {
         val activeSongList = if (isShuffleEnabled && shuffleQueue.isNotEmpty()) shuffleQueue else currentPlaylist
 
         // Playback commands coordinate the Media3 service.
-        fun play(index: Int) {
-            val song = activeSongList.getOrNull(index) ?: return
+        fun play(index: Int, targetList: List<Song> = activeSongList) {
+            val song = targetList.getOrNull(index) ?: return
             currentIndex = index
             playedShuffleIndices = playedShuffleIndices + index
             val mc = controller ?: return
-            mc.setMediaItems(activeSongList.map { it.toMediaItem() }, index, 0L)
-            mc.prepare()
-            mc.play()
+            val currentMediaIdAtIndex = if (index in 0 until mc.mediaItemCount) mc.getMediaItemAt(index).mediaId else null
+            if (mc.mediaItemCount == targetList.size && currentMediaIdAtIndex == song.id.toString()) {
+                mc.seekTo(index, 0L)
+                mc.play()
+            } else {
+                mc.setMediaItems(targetList.map { it.toMediaItem() }, index, 0L)
+                mc.prepare()
+                mc.play()
+            }
             isPlaying = true
         }
 
         fun playInList(songList: List<Song>, index: Int) {
             val selectedSong = songList.getOrNull(index) ?: return
             currentPlaylist = songList
-            if (isShuffleEnabled) {
-                shuffleQueue = generateShuffleQueue(songList, selectedSong)
-                play(0)
+            val targetList = if (isShuffleEnabled) {
+                val newQueue = generateShuffleQueue(songList, selectedSong)
+                shuffleQueue = newQueue
+                newQueue
             } else {
                 shuffleQueue = emptyList()
-                play(index)
+                songList
             }
+            val targetIdx = if (isShuffleEnabled) 0 else index
+            play(targetIdx, targetList)
         }
 
         fun pauseResume() {
@@ -304,7 +313,9 @@ class MainActivity : ComponentActivity() {
 
 
         // Mirrors Media3 player state into Compose.
-        if (controller != null) {
+        DisposableEffect(controller) {
+            if (controller == null) return@DisposableEffect onDispose {}
+
             isShuffleEnabled = controller.shuffleModeEnabled
             if (shuffleQueue.isEmpty() && controller.shuffleModeEnabled && localSongs.isNotEmpty()) {
                 val controllerSongs = mutableListOf<Song>()
@@ -347,19 +358,22 @@ class MainActivity : ComponentActivity() {
             duration = controller.duration.coerceAtLeast(0L)
             currentPosition = controller.currentPosition.coerceAtLeast(0L)
 
-            controller.addListener(object : Player.Listener {
+            val listener = object : Player.Listener {
                 override fun onIsPlayingChanged(p: Boolean) { isPlaying = p }
                 override fun onMediaItemTransition(m: MediaItem?, r: Int) {
-                    val mediaId = m?.mediaId ?: controller.currentMediaItem?.mediaId
-                    if (mediaId != null) {
-                        val mappedIdx = activeSongList.indexOfFirst { it.id.toString() == mediaId }
-                        if (mappedIdx != -1) currentIndex = mappedIdx
+                    val idx = controller.currentMediaItemIndex
+                    if (idx in 0 until controller.mediaItemCount) {
+                        currentIndex = idx
                     }
                     duration = controller.duration.coerceAtLeast(0L)
                 }
                 override fun onPlaybackStateChanged(s: Int) { duration = controller.duration.coerceAtLeast(0L) }
                 override fun onPositionDiscontinuity(o: Player.PositionInfo, n: Player.PositionInfo, r: Int) { currentPosition = n.positionMs }
-            })
+            }
+            controller.addListener(listener)
+            onDispose {
+                controller.removeListener(listener)
+            }
         }
 
         // Keeps elapsed time synchronized with the active track.
@@ -568,19 +582,14 @@ class MainActivity : ComponentActivity() {
                                             controller?.shuffleModeEnabled = true
                                             val newQueue = generateShuffleQueue(pl.songs, currentSong)
                                             shuffleQueue = newQueue
-                                            if (currentSong != null) {
-                                                currentIndex = newQueue.indexOfFirst { it.id == currentSong.id }.coerceAtLeast(0)
-                                            } else {
-                                                currentIndex = 0
-                                                if (!isPlaying) play(0)
-                                            }
+                                            val newIndex = if (currentSong != null) newQueue.indexOfFirst { it.id == currentSong.id }.coerceAtLeast(0) else 0
+                                            play(newIndex, newQueue)
                                         } else {
                                             isShuffleEnabled = false
                                             controller?.shuffleModeEnabled = false
                                             shuffleQueue = emptyList()
-                                            if (currentSong != null) {
-                                                currentIndex = pl.songs.indexOfFirst { it.id == currentSong.id }.coerceAtLeast(0)
-                                            }
+                                            val newIndex = if (currentSong != null) pl.songs.indexOfFirst { it.id == currentSong.id }.coerceAtLeast(0) else 0
+                                            play(newIndex, pl.songs)
                                         }
                                     }
                                 },
@@ -755,19 +764,18 @@ class MainActivity : ComponentActivity() {
                         val currentSong = activeSongList.getOrNull(currentIndex)
                         isShuffleEnabled = enable
                         controller?.shuffleModeEnabled = enable
-                        if (enable) {
+                        val newList = if (enable) {
                             val newQueue = generateShuffleQueue(currentPlaylist, currentSong)
                             shuffleQueue = newQueue
-                            if (currentSong != null) {
-                                currentIndex = newQueue.indexOfFirst { it.id == currentSong.id }.coerceAtLeast(0)
-                            } else {
-                                currentIndex = 0
-                            }
+                            newQueue
                         } else {
                             shuffleQueue = emptyList()
-                            if (currentSong != null) {
-                                currentIndex = currentPlaylist.indexOfFirst { it.id == currentSong.id }.coerceAtLeast(0)
-                            }
+                            currentPlaylist
+                        }
+                        if (newList.isNotEmpty()) {
+                            val newIndex = if (currentSong != null) newList.indexOfFirst { it.id == currentSong.id }.coerceAtLeast(0) else 0
+                            currentIndex = newIndex
+                            controller?.setMediaItems(newList.map { it.toMediaItem() }, newIndex, currentPosition)
                         }
                     }
                 )

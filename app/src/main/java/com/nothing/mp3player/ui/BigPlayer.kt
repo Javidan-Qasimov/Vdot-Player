@@ -30,6 +30,7 @@ import kotlinx.coroutines.delay
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.math.abs
 import kotlin.math.pow
+import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 /** Full-screen playback controls, track paging, and vinyl display. */
@@ -54,12 +55,15 @@ fun BigPlayer(
     val songCount = songs.size
     val safeIndex = if (songCount > 0) currentIndex.coerceIn(0, songCount - 1) else 0
 
-    val pagerState = rememberPagerState(
-        initialPage = safeIndex,
-        pageCount = { songCount }
-    )
+    val pagerState = key(songs) {
+        rememberPagerState(
+            initialPage = safeIndex,
+            pageCount = { songCount }
+        )
+    }
 
     val currentOnSeekToSong by rememberUpdatedState(onSeekToSong)
+    val currentSafeIndex by rememberUpdatedState(safeIndex)
 
     var localDragPosition by remember { mutableStateOf<Long?>(null) }
     var accumulatedRotation by remember { mutableFloatStateOf(0f) }
@@ -91,7 +95,7 @@ fun BigPlayer(
     LaunchedEffect(pagerState) {
         snapshotFlow { pagerState.currentPage }
             .collect { page ->
-                if (songCount > 0 && page in 0 until songCount && page != safeIndex) {
+                if (songCount > 0 && page in 0 until songCount && page != currentSafeIndex) {
                     currentOnSeekToSong(page)
                 }
             }
@@ -108,18 +112,20 @@ fun BigPlayer(
     ) {
 
         Canvas(modifier = Modifier.fillMaxSize()) { 
-            val spacing = 32.dp.toPx()
+            val targetSpacing = 32.dp.toPx()
+            val numCols = (size.width / targetSpacing).roundToInt().coerceAtLeast(1)
+            val numRows = (size.height / targetSpacing).roundToInt().coerceAtLeast(1)
+            val stepX = size.width / numCols
+            val stepY = size.height / numRows
             val center = Offset(size.width / 2f, size.height / 2f)
             val maxDist = sqrt(center.x.pow(2) + center.y.pow(2))
-            val cols = (size.width / spacing).toInt()
-            val rows = (size.height / spacing).toInt()
-            for (i in 0..cols) { 
-                for (j in 0..rows) { 
-                    val x = i * spacing
-                    val y = j * spacing
+            for (i in 0..numCols) { 
+                for (j in 0..numRows) { 
+                    val x = i * stepX
+                    val y = j * stepY
                     val dist = sqrt((x - center.x).pow(2) + (y - center.y).pow(2))
                     val alphaFactor = (1f - (dist / maxDist) * 0.5f).coerceIn(0f, 1f)
-                    drawCircle(color = Color.White.copy(alpha = 0.25f * alphaFactor), radius = 1.0.dp.toPx(), center = Offset(x, y)) 
+                    drawCircle(color = Color.White.copy(alpha = 0.38f * alphaFactor), radius = 1.0.dp.toPx(), center = Offset(x, y)) 
                 } 
             } 
         }
