@@ -1,33 +1,57 @@
-# NothingMP3
+# Vdot Player
 
-An Android music player built with Jetpack Compose. It plays audio files stored on the device and provides search, playback queue, and playlist features. The project also includes YouTube playback support.
+**A little music player with a big dot-matrix soul.** Vdot Player brings a bold, Nothing OS–inspired visual language to your on-device music: crisp monochrome surfaces, striking red accents, dotted typography, and a record-inspired full-screen player. It is a fun visual experiment built around the joy of listening—and a demo that is still actively in development.
 
-> This is an unofficial app and is not affiliated with or endorsed by Nothing.
+> **Status: Demo / work in progress.** Features, visuals, and behavior may change. This project is not an official Nothing product and is not affiliated with or endorsed by Nothing Technology Limited.
 
-## Features
+## Preview
 
-- Browse and search music stored on the device
-- Play, pause, skip tracks, shuffle, and seek within tracks
+### See it in motion
+
+[▶ Watch the Vdot Player demo video](docs/media/vdot-player-demo.mp4)
+
+### Screenshots
+
+| Now playing | Now playing |
+|:--:|:--:|
+| ![Vdot Player showing the record-inspired player with “Wet” playing](docs/media/player-wet.jpg) | ![Vdot Player showing the record-inspired player with “Queen of the Banshees” playing](docs/media/player-banshees.jpg) |
+
+| Track library | Playlist detail |
+|:--:|:--:|
+| ![Vdot Player track library with dot-matrix title and mini-player](docs/media/track-library.jpg) | ![Vdot Player playlist screen with dot-matrix heading and track list](docs/media/playlist-detail.jpg) |
+
+## What it does
+
+- Browse and search audio stored on your Android device
+- Play, pause, skip, shuffle, and seek through tracks
 - Create and manage playlists
-- Background playback and media notifications powered by AndroidX Media3
-- Nothing-inspired interface and Ndot typeface
-- YouTube video playback integration
+- Keep playback going in the background with media controls and notifications
+- Enjoy a custom, record-inspired player screen and a Nothing OS–inspired dot-matrix look
 
-## Requirements
+## Built with
+
+- **Kotlin** for Android development
+- **Jetpack Compose** and **Material 3** for the interface
+- **AndroidX Media3** (ExoPlayer and MediaSession) for playback and media controls
+- **Coil** for image loading
+- **Gradle** for builds
+
+## Getting started
+
+### Requirements
 
 - Android Studio
 - JDK 17
 - Android SDK 34
 - Android 8.0 (API 26) or later device or emulator
 
-## Build and run
+### Run the app
 
 1. Clone this repository and open it in Android Studio.
-2. Wait for Gradle sync to finish.
-3. Select an Android device or emulator and run the `app` configuration.
-4. Grant access to audio files when prompted.
+2. Let Gradle sync, then select an Android device or emulator.
+3. Run the `app` configuration and grant access to audio when prompted.
 
-To build from the command line:
+Build a debug APK from the project directory:
 
 ```bash
 ./gradlew assembleDebug
@@ -39,17 +63,8 @@ On Windows:
 gradlew.bat assembleDebug
 ```
 
-## Technologies
+## Font and attribution
 
-- Kotlin
-- Jetpack Compose and Material 3
-- AndroidX Media3 ExoPlayer and MediaSession
-- Coil
+The app bundles **NDOT 47 (inspired by NOTHING)** by Interactivate under the SIL Open Font License 1.1. The font license is included in [`licenses/NDOT-47-OFL.txt`](licenses/NDOT-47-OFL.txt) and in the app assets.
 
-## Font attribution
-
-The app bundles **NDOT 47 (inspired by NOTHING)** by Interactivate, licensed under the SIL Open Font License 1.1. The copyright notice and license are included in [`licenses/NDOT-47-OFL.txt`](licenses/NDOT-47-OFL.txt) and in the APK at `assets/licenses/NDOT-47-OFL.txt`.
-
-## Permissions
-
-The app uses Android media permissions to read local audio files and play audio in the background. The YouTube playback integration requires network access.
+Nothing and Nothing OS are trademarks of Nothing Technology Limited. Vdot Player is an independent, unofficial demo project; the visual inspiration does not imply sponsorship or endorsement.
