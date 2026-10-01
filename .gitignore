@@ -1,0 +1,21 @@
+# Gradle
+.gradle/
+**/build/
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
+
+# Android/IDE yerel dosyaları
+local.properties
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Android Studio / Gradle çıktıları
+/captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+
+/app/release/
