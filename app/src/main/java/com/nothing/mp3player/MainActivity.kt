@@ -59,7 +59,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.runtime.collectAsState
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
@@ -115,7 +115,7 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     fun App(viewModel: MainViewModel, controller: MediaController?) {
-        val state by viewModel.uiState.collectAsStateWithLifecycle()
+        val state by viewModel.uiState.collectAsState()
         val context = LocalContext.current
         val focusManager = LocalFocusManager.current
 
