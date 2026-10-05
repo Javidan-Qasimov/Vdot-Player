@@ -5,7 +5,6 @@ import android.app.Activity
 import android.app.RecoverableSecurityException
 import android.content.ComponentName
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
@@ -15,55 +14,79 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.*
+import androidx.activity.viewModels
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-
-import androidx.media3.common.MediaItem
-import androidx.media3.common.Player
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import com.nothing.mp3player.model.Song
-import com.nothing.mp3player.model.Playlist
-import com.nothing.mp3player.data.AudioLibraryRepository
-import com.nothing.mp3player.data.PlaylistRepository
-
-import com.nothing.mp3player.model.toMediaItem
-import com.nothing.mp3player.ui.*
-import com.nothing.mp3player.utils.*
-import kotlin.time.Duration.Companion.milliseconds
+import com.nothing.mp3player.ui.AddSongsToPlaylistView
+import com.nothing.mp3player.ui.AddToPlaylistDialog
+import com.nothing.mp3player.ui.BigPlayer
+import com.nothing.mp3player.ui.CreatePlaylistDialog
+import com.nothing.mp3player.ui.DeletePlaylistConfirmationDialog
+import com.nothing.mp3player.ui.DeleteSongConfirmationDialog
+import com.nothing.mp3player.ui.LibraryHeader
+import com.nothing.mp3player.ui.MainViewModel
+import com.nothing.mp3player.ui.NdotFont
+import com.nothing.mp3player.ui.PlaylistDetailView
+import com.nothing.mp3player.ui.PlaylistLibraryList
+import com.nothing.mp3player.ui.TrackLibraryList
+import com.nothing.mp3player.utils.NothingRed
 
 class MainActivity : ComponentActivity() {
+
+    private val viewModel: MainViewModel by viewModels()
     private var controllerFuture: ListenableFuture<MediaController>? = null
-    private var mediaController by mutableStateOf<MediaController?>(null)
+    private var mediaController: MediaController? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { App(mediaController) }
+        setContent { App(viewModel, mediaController) }
     }
 
     override fun onStart() {
@@ -72,7 +95,11 @@ class MainActivity : ComponentActivity() {
         controllerFuture = MediaController.Builder(this, sessionToken).buildAsync()
         controllerFuture?.addListener({
             try {
-                mediaController = controllerFuture?.get()
+                val controller = controllerFuture?.get()
+                mediaController = controller
+                if (controller != null) {
+                    viewModel.attachPlayerController(controller)
+                }
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -81,81 +108,34 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        viewModel.detachPlayerController()
         controllerFuture?.let { MediaController.releaseFuture(it) }
         mediaController = null
     }
 
     @Composable
-    fun App(controller: MediaController?) {
-        var granted by remember { mutableStateOf(hasPermissions()) }
-        var localSongs by remember { mutableStateOf(listOf<Song>()) }
-        var searchResults by remember { mutableStateOf(listOf<Song>()) }
-        var currentPlaylist by remember { mutableStateOf(listOf<Song>()) }
-
-        var currentIndex by remember { mutableIntStateOf(-1) }
-        var isPlaying by remember { mutableStateOf(false) }
-        var currentPosition by remember { mutableLongStateOf(0L) }
-        var duration by remember { mutableLongStateOf(0L) }
-        var isBigPlayerVisible by remember { mutableStateOf(false) }
-        var isDragging by remember { mutableStateOf(false) }
-        var wasPlayingBeforeDrag by remember { mutableStateOf(false) }
+    fun App(viewModel: MainViewModel, controller: MediaController?) {
+        val state by viewModel.uiState.collectAsStateWithLifecycle()
         val context = LocalContext.current
         val focusManager = LocalFocusManager.current
-        val playlistRepository = remember(context) { PlaylistRepository(context.applicationContext) }
-        var isShuffleEnabled by remember { mutableStateOf(false) }
-        var selectedTab by remember { mutableIntStateOf(0) }
-        var isSearchActive by remember { mutableStateOf(false) }
-        var searchQuery by remember { mutableStateOf("") }
-        // Screen state is grouped here; playback and persistence work are delegated to focused helpers.
-        var playlists by remember { mutableStateOf(emptyList<Playlist>()) }
-        var activePlaylistForAdding by remember { mutableStateOf<Int?>(null) }
-        var activePlaylistDetail by remember { mutableStateOf<Playlist?>(null) }
-        var showCreatePlaylistDialog by remember { mutableStateOf(false) }
-        var showAddToPlaylistDialog by remember { mutableStateOf(false) }
-        var newPlaylistName by remember { mutableStateOf("") }
-        var playlistSearchQuery by remember { mutableStateOf("") }
-        var isPlaylistSearchActive by remember { mutableStateOf(false) }
-        var addSongSearchQuery by remember { mutableStateOf("") }
-        var isAddSongSearchActive by remember { mutableStateOf(false) }
-        var isFadingOut by remember { mutableStateOf(false) }
 
-        var playlistTrackMenuSong by remember { mutableStateOf<Song?>(null) }
-        var trackMenuSong by remember { mutableStateOf<Song?>(null) }
-        var songToDelete by remember { mutableStateOf<Song?>(null) }
-        var showDeleteConfirmationDialog by remember { mutableStateOf(false) }
-        var playlistMenuName by remember { mutableStateOf<String?>(null) }
-        var playlistToDelete by remember { mutableStateOf<String?>(null) }
-        var showDeletePlaylistConfirmationDialog by remember { mutableStateOf(false) }
-
-        // Removes a deleted track from every in-memory collection that can display or play it.
-        fun removeSongFromLists(song: Song) {
-            localSongs = localSongs.filter { it.id != song.id }
-            searchResults = searchResults.filter { it.id != song.id }
-            currentPlaylist = currentPlaylist.filter { it.id != song.id }
-            playlists = playlists.map { playlist ->
-                playlist.copy(songs = playlist.songs.filterNot { it.id == song.id })
-            }
-            if (activePlaylistDetail != null) {
-                activePlaylistDetail = activePlaylistDetail!!.copy(
-                    songs = activePlaylistDetail!!.songs.filterNot { it.id == song.id }
-                )
-            }
-        }
+        val searchFocusRequester = remember { FocusRequester() }
+        val playlistSearchFocusRequester = remember { FocusRequester() }
+        val addSongSearchFocusRequester = remember { FocusRequester() }
 
         // Handles Android's confirmation flow when deleting media requires user approval.
         val deleteLauncher = rememberLauncherForActivityResult(
             ActivityResultContracts.StartIntentSenderForResult()
         ) { result ->
             if (result.resultCode == Activity.RESULT_OK) {
-                songToDelete?.let { song ->
-                    removeSongFromLists(song)
-                    songToDelete = null
+                state.songToDelete?.let { song ->
+                    viewModel.removeSongFromLists(song)
                 }
             }
         }
 
         fun deleteSongFromDevice(song: Song) {
-            songToDelete = song
+            viewModel.setSongToDelete(song, showDialog = false)
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                     val pendingIntent = MediaStore.createDeleteRequest(context.contentResolver, listOf(song.uri))
@@ -163,16 +143,14 @@ class MainActivity : ComponentActivity() {
                 } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     try {
                         context.contentResolver.delete(song.uri, null, null)
-                        removeSongFromLists(song)
-                        songToDelete = null
+                        viewModel.removeSongFromLists(song)
                     } catch (e: RecoverableSecurityException) {
                         deleteLauncher.launch(IntentSenderRequest.Builder(e.userAction.actionIntent.intentSender).build())
                     }
                 } else {
                     val rows = context.contentResolver.delete(song.uri, null, null)
                     if (rows > 0) {
-                        removeSongFromLists(song)
-                        songToDelete = null
+                        viewModel.removeSongFromLists(song)
                     }
                 }
             } catch (e: Exception) {
@@ -180,84 +158,7 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Focus requesters and shuffle history support transient interactions in the screens.
-        val searchFocusRequester = remember { FocusRequester() }
-        val playlistSearchFocusRequester = remember { FocusRequester() }
-        val addSongSearchFocusRequester = remember { FocusRequester() }
-        var playedShuffleIndices by remember { mutableStateOf(setOf<Int>()) }
-        var shuffleQueue by remember { mutableStateOf<List<Song>>(emptyList()) }
-
-        fun generateShuffleQueue(playlist: List<Song>, currentSong: Song?): List<Song> {
-            if (playlist.isEmpty()) return emptyList()
-            val remaining = if (currentSong != null) playlist.filter { it.id != currentSong.id }.shuffled() else playlist.shuffled()
-            return if (currentSong != null) listOf(currentSong) + remaining else remaining
-        }
-
-        val activeSongList = if (isShuffleEnabled && shuffleQueue.isNotEmpty()) shuffleQueue else currentPlaylist
-
-        // Playback commands coordinate the Media3 service.
-        fun play(index: Int, targetList: List<Song> = activeSongList) {
-            val song = targetList.getOrNull(index) ?: return
-            currentIndex = index
-            playedShuffleIndices = playedShuffleIndices + index
-            val mc = controller ?: return
-            val currentMediaIdAtIndex = if (index in 0 until mc.mediaItemCount) mc.getMediaItemAt(index).mediaId else null
-            if (mc.mediaItemCount == targetList.size && currentMediaIdAtIndex == song.id.toString()) {
-                mc.seekTo(index, 0L)
-                mc.play()
-            } else {
-                mc.setMediaItems(targetList.map { it.toMediaItem() }, index, 0L)
-                mc.prepare()
-                mc.play()
-            }
-            isPlaying = true
-        }
-
-        fun playInList(songList: List<Song>, index: Int) {
-            val selectedSong = songList.getOrNull(index) ?: return
-            currentPlaylist = songList
-            val targetList = if (isShuffleEnabled) {
-                val newQueue = generateShuffleQueue(songList, selectedSong)
-                shuffleQueue = newQueue
-                newQueue
-            } else {
-                shuffleQueue = emptyList()
-                songList
-            }
-            val targetIdx = if (isShuffleEnabled) 0 else index
-            play(targetIdx, targetList)
-        }
-
-        fun pauseResume() {
-            val mc = controller ?: return
-            if (mc.isPlaying) mc.pause() else mc.play()
-        }
-
-        fun next() {
-            if (activeSongList.isNotEmpty()) {
-                if (currentIndex < activeSongList.size - 1) {
-                    play(currentIndex + 1)
-                } else if (isShuffleEnabled) {
-                    val currentSong = activeSongList.getOrNull(currentIndex)
-                    shuffleQueue = generateShuffleQueue(currentPlaylist, currentSong)
-                    play(0)
-                } else if (controller?.hasNextMediaItem() == true) {
-                    controller.seekToNext()
-                }
-            }
-        }
-
-        fun prev() {
-            if (activeSongList.isNotEmpty()) {
-                if (currentIndex > 0) {
-                    play(currentIndex - 1)
-                } else if (controller?.hasPreviousMediaItem() == true) {
-                    controller.seekToPrevious()
-                }
-            }
-        }
-
-        // Requests the platform permissions needed to read music and show playback notifications.
+        // Requests platform permissions.
         val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { map ->
             val audioGranted = if (Build.VERSION.SDK_INT >= 33) {
                 map[Manifest.permission.READ_MEDIA_AUDIO] == true
@@ -265,532 +166,344 @@ class MainActivity : ComponentActivity() {
                 map[Manifest.permission.READ_EXTERNAL_STORAGE] == true
             }
             if (audioGranted || hasPermissions()) {
-                granted = true
+                viewModel.setPermissionGranted(true)
             }
         }
-        // Rechecks media access when the user returns from Android's Settings screen.
+
         val lifecycleOwner = LocalLifecycleOwner.current
         DisposableEffect(lifecycleOwner) {
             val observer = LifecycleEventObserver { _, event ->
                 if (event == Lifecycle.Event.ON_RESUME) {
-                    if (hasPermissions()) granted = true
+                    if (hasPermissions()) viewModel.setPermissionGranted(true)
                 }
             }
             lifecycleOwner.lifecycle.addObserver(observer)
             onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
         }
-        LaunchedEffect(Unit) { if (!granted) launcher.launch(requiredPermissions()) }
 
-        // Restore playlists once when the app screen is first composed.
         LaunchedEffect(Unit) {
-            playlists = playlistRepository.loadPlaylists()
-        }
-
-        // Persist playlist edits through the repository instead of building JSON in the UI.
-        LaunchedEffect(playlists) {
-            playlistRepository.savePlaylists(playlists)
-        }
-
-        // Request the device library off the main thread after media permission is granted.
-        LaunchedEffect(granted) {
-            if (granted) {
-                withContext(Dispatchers.IO) {
-                    val libraryRepository = AudioLibraryRepository(this@MainActivity)
-                    var songs = libraryRepository.loadSongs()
-                    var retries = 0
-                    while (songs.isEmpty() && retries < 3) {
-                        delay(400)
-                        songs = libraryRepository.loadSongs()
-                        retries++
-                    }
-                    withContext(Dispatchers.Main) {
-                        localSongs = songs
-                        if (currentPlaylist.isEmpty()) currentPlaylist = songs
-                    }
-                }
+            if (!state.granted) {
+                if (hasPermissions()) viewModel.setPermissionGranted(true)
+                else launcher.launch(requiredPermissions())
             }
         }
 
+        LaunchedEffect(Unit) {
+            viewModel.loadPlaylists()
+        }
 
-        // Mirrors Media3 player state into Compose.
-        DisposableEffect(controller) {
-            if (controller == null) return@DisposableEffect onDispose {}
-
-            isShuffleEnabled = controller.shuffleModeEnabled
-            if (shuffleQueue.isEmpty() && controller.shuffleModeEnabled && localSongs.isNotEmpty()) {
-                val controllerSongs = mutableListOf<Song>()
-                for (i in 0 until controller.mediaItemCount) {
-                    val item = controller.getMediaItemAt(i)
-                    val id = item.mediaId.toLongOrNull() ?: 0L
-                    val found = localSongs.find { it.id == id }
-                        ?: playlists.asSequence().flatMap { it.songs }.find { it.id == id }
-                        ?: Song(
-                            id = id,
-                            title = item.mediaMetadata.title?.toString() ?: "Unknown",
-                            artist = item.mediaMetadata.artist?.toString() ?: "Unknown",
-                            uri = item.localConfiguration?.uri ?: Uri.EMPTY,
-                            albumId = -1
-                        )
-                    controllerSongs.add(found)
-                }
-                shuffleQueue = controllerSongs
-            }
-            if (currentPlaylist.isEmpty() && !controller.shuffleModeEnabled && localSongs.isNotEmpty()) {
-                val controllerSongs = mutableListOf<Song>()
-                for (i in 0 until controller.mediaItemCount) {
-                    val item = controller.getMediaItemAt(i)
-                    val id = item.mediaId.toLongOrNull() ?: 0L
-                    val found = localSongs.find { it.id == id }
-                        ?: playlists.asSequence().flatMap { it.songs }.find { it.id == id }
-                        ?: Song(
-                            id = id,
-                            title = item.mediaMetadata.title?.toString() ?: "Unknown",
-                            artist = item.mediaMetadata.artist?.toString() ?: "Unknown",
-                            uri = item.localConfiguration?.uri ?: Uri.EMPTY,
-                            albumId = -1
-                        )
-                    controllerSongs.add(found)
-                }
-                currentPlaylist = controllerSongs
-            }
-
-            isPlaying = controller.isPlaying
-            duration = controller.duration.coerceAtLeast(0L)
-            currentPosition = controller.currentPosition.coerceAtLeast(0L)
-
-            val listener = object : Player.Listener {
-                override fun onIsPlayingChanged(p: Boolean) { isPlaying = p }
-                override fun onMediaItemTransition(m: MediaItem?, r: Int) {
-                    val idx = controller.currentMediaItemIndex
-                    if (idx in 0 until controller.mediaItemCount) {
-                        currentIndex = idx
-                    }
-                    duration = controller.duration.coerceAtLeast(0L)
-                }
-                override fun onPlaybackStateChanged(s: Int) { duration = controller.duration.coerceAtLeast(0L) }
-                override fun onPositionDiscontinuity(o: Player.PositionInfo, n: Player.PositionInfo, r: Int) { currentPosition = n.positionMs }
-            }
-            controller.addListener(listener)
-            onDispose {
-                controller.removeListener(listener)
+        LaunchedEffect(state.granted) {
+            if (state.granted) {
+                viewModel.loadLibrary()
             }
         }
 
-        // Keeps elapsed time synchronized with the active track.
-        LaunchedEffect(isPlaying, controller, isDragging, currentIndex, duration, currentPosition, isBigPlayerVisible) {
-            if (isPlaying && !isDragging && isBigPlayerVisible && controller != null) {
-                while (isPlaying && !isDragging && isBigPlayerVisible) {
-                    currentPosition = controller.currentPosition.coerceAtLeast(0L)
-                    duration = controller.duration.coerceAtLeast(0L)
-                    delay(500.milliseconds)
-                }
-            }
-        }
+        val isSubScreenOpen = state.isBigPlayerVisible || state.activePlaylistForAdding != null ||
+            state.activePlaylistDetail != null || state.isPlaylistSearchActive ||
+            state.isAddSongSearchActive || state.isSearchActive || state.showDeleteConfirmationDialog
 
-        // Fades tracks out near the end and fades the next track in after playback starts.
-        LaunchedEffect(isPlaying, isDragging, currentIndex, duration, currentPosition) {
-            if (isPlaying && !isDragging && duration > 10_000L) {
-                val remainingMs = duration - currentPosition
-                
-                if (remainingMs in 1L..10_000L) {
-                    val fadeOutVolume = (remainingMs / 10_000f).coerceIn(0.05f, 1f)
-                    controller?.volume = fadeOutVolume
-                    
-                    if (remainingMs <= 1000L && !isFadingOut) {
-                        isFadingOut = true
-                        next()
-                    }
-                } else if (remainingMs > 10_000L) {
-                    isFadingOut = false
-                    if (currentPosition in 1L..2500L) {
-                        val fadeInVolume = (currentPosition / 2500f).coerceIn(0.05f, 1f)
-                        controller?.volume = fadeInVolume
-                    } else if (currentPosition > 2500L) {
-                        controller?.volume = 1f
-                    }
-                }
-            }
-        }
-
-        val isSubScreenOpen = isBigPlayerVisible || activePlaylistForAdding != null || activePlaylistDetail != null || isPlaylistSearchActive || isAddSongSearchActive || isSearchActive || showDeleteConfirmationDialog
-
-        // Closes the most recently opened screen or search mode when Back is pressed.
         BackHandler(enabled = isSubScreenOpen) {
             when {
-                isBigPlayerVisible -> {
-                    isBigPlayerVisible = false
+                state.isBigPlayerVisible -> viewModel.setBigPlayerVisible(false)
+                state.activePlaylistForAdding != null -> {
+                    viewModel.showAddToPlaylistDialog(false)
+                    viewModel.setIsAddSongSearchActive(false)
+                    viewModel.setAddSongSearchQuery("")
                 }
-                activePlaylistForAdding != null -> {
-                    activePlaylistForAdding = null
-                    isAddSongSearchActive = false
-                    addSongSearchQuery = ""
+                state.activePlaylistDetail != null -> {
+                    viewModel.setActivePlaylistDetail(null)
+                    viewModel.setIsPlaylistSearchActive(false)
+                    viewModel.setPlaylistSearchQuery("")
                 }
-                activePlaylistDetail != null -> {
-                    activePlaylistDetail = null
-                    isPlaylistSearchActive = false
-                    playlistSearchQuery = ""
+                state.isPlaylistSearchActive -> {
+                    viewModel.setIsPlaylistSearchActive(false)
+                    viewModel.setPlaylistSearchQuery("")
                 }
-                isPlaylistSearchActive -> {
-                    isPlaylistSearchActive = false
-                    playlistSearchQuery = ""
+                state.isAddSongSearchActive -> {
+                    viewModel.setIsAddSongSearchActive(false)
+                    viewModel.setAddSongSearchQuery("")
                 }
-                isAddSongSearchActive -> {
-                    isAddSongSearchActive = false
-                    addSongSearchQuery = ""
-                }
-                isSearchActive -> {
-                    isSearchActive = false
-                    searchQuery = ""
+                state.isSearchActive -> {
+                    viewModel.setIsSearchActive(false)
+                    viewModel.setSearchQuery("")
                 }
             }
         }
 
-        // Main app surface: background player host, library screens, navigation and overlays.
         Box(Modifier.fillMaxSize().background(Color.Black)) {
-            // Header and library content switch between tracks, playlists, search, and details.
             Column(Modifier.fillMaxSize()) {
-                if (activePlaylistDetail == null && activePlaylistForAdding == null) {
+                if (state.activePlaylistDetail == null && state.activePlaylistForAdding == null) {
                     LibraryHeader(
-                        isSearchActive = isSearchActive,
-                        searchQuery = searchQuery,
+                        isSearchActive = state.isSearchActive,
+                        searchQuery = state.searchQuery,
                         searchFocusRequester = searchFocusRequester,
-                        onSearchQueryChange = { query ->
-                            searchQuery = query
-                            val trimmedQuery = query.trim()
-                            searchResults = if (trimmedQuery.isEmpty()) {
-                                localSongs
-                            } else {
-                                localSongs.filter { song ->
-                                    song.title.contains(trimmedQuery, ignoreCase = true) ||
-                                        song.artist.contains(trimmedQuery, ignoreCase = true)
-                                }
-                            }
-                        },
+                        onSearchQueryChange = { query -> viewModel.setSearchQuery(query) },
                         onExitSearch = {
-                            isSearchActive = false
-                            searchResults = emptyList()
-                            searchQuery = ""
+                            viewModel.setIsSearchActive(false)
+                            viewModel.setSearchQuery("")
                         },
                         onAddPlaylistAction = {
-                            if (currentIndex != -1 && currentPlaylist.isNotEmpty()) {
-                                showAddToPlaylistDialog = true
+                            if (state.currentIndex != -1 && state.currentPlaylist.isNotEmpty()) {
+                                viewModel.showAddToPlaylistDialog(true)
                             } else {
-                                showCreatePlaylistDialog = true
+                                viewModel.showCreatePlaylistDialog(true)
                             }
                         },
                         onStartSearch = {
-                            isSearchActive = true
-                            searchResults = localSongs
+                            viewModel.setIsSearchActive(true)
+                            viewModel.setSearchQuery("")
                         }
                     )
                 }
 
                 Box(Modifier.weight(1f)) {
-                    if (!granted) {
+                    if (!state.granted) {
                         Box(
                             Modifier
                                 .fillMaxSize()
                                 .clickable {
-                                    if (hasPermissions()) {
-                                        granted = true
-                                    } else {
-                                        launcher.launch(requiredPermissions())
-                                    }
+                                    if (hasPermissions()) viewModel.setPermissionGranted(true)
+                                    else launcher.launch(requiredPermissions())
                                 },
                             contentAlignment = Alignment.Center
                         ) {
                             Text(text = "Music permission required (Tap to grant)", color = Color.White, fontFamily = NdotFont, letterSpacing = 1.sp)
                         }
-                    }
-                    else {
-                        val currentSongId = remember(currentIndex, currentPlaylist, isShuffleEnabled, shuffleQueue) { 
-                            activeSongList.getOrNull(currentIndex)?.id ?: controller?.currentMediaItem?.mediaId?.toLongOrNull() 
+                    } else {
+                        val currentSongId = remember(state.currentIndex, state.currentPlaylist, state.isShuffleEnabled, state.shuffleQueue) {
+                            state.activeSongList.getOrNull(state.currentIndex)?.id ?: controller?.currentMediaItem?.mediaId?.toLongOrNull()
                         }
-                        if (activePlaylistForAdding != null) {
-                            val targetIndex = activePlaylistForAdding!!
-                            val currentPl = playlists.getOrNull(targetIndex)
+
+                        if (state.activePlaylistForAdding != null) {
+                            val targetIndex = state.activePlaylistForAdding!!
+                            val currentPl = state.playlists.getOrNull(targetIndex)
                             if (currentPl != null) {
                                 AddSongsToPlaylistView(
                                     playlistName = currentPl.name,
                                     currentSongs = currentPl.songs,
-                                    allLocalSongs = localSongs,
-                                    isSearchActive = isAddSongSearchActive,
-                                    searchQuery = addSongSearchQuery,
+                                    allLocalSongs = state.localSongs,
+                                    isSearchActive = state.isAddSongSearchActive,
+                                    searchQuery = state.addSongSearchQuery,
                                     searchFocusRequester = addSongSearchFocusRequester,
-                                    onSearchToggle = { isAddSongSearchActive = it },
-                                    onSearchQueryChange = { addSongSearchQuery = it },
+                                    onSearchToggle = { viewModel.setIsAddSongSearchActive(it) },
+                                    onSearchQueryChange = { viewModel.setAddSongSearchQuery(it) },
                                     onGoBack = {
-                                        activePlaylistForAdding = null
-                                        isAddSongSearchActive = false
-                                        addSongSearchQuery = ""
+                                        viewModel.showAddToPlaylistDialog(false)
+                                        viewModel.setIsAddSongSearchActive(false)
+                                        viewModel.setAddSongSearchQuery("")
                                     },
                                     onDone = { tempSongs ->
-                                        val updatedList = playlists.toMutableList()
-                                        val updatedPlaylist = currentPl.copy(songs = tempSongs)
-                                        updatedList[targetIndex] = updatedPlaylist
-                                        playlists = updatedList
-                                        if (activePlaylistDetail?.name == currentPl.name) {
-                                            activePlaylistDetail = updatedPlaylist
+                                        tempSongs.forEach { song ->
+                                            viewModel.addSongToPlaylist(currentPl.name, song)
                                         }
-                                        activePlaylistForAdding = null
-                                        isAddSongSearchActive = false
-                                        addSongSearchQuery = ""
+                                        viewModel.showAddToPlaylistDialog(false)
+                                        viewModel.setIsAddSongSearchActive(false)
+                                        viewModel.setAddSongSearchQuery("")
                                     }
                                 )
                             }
-                        } else if (activePlaylistDetail != null) {
-                            val pl = activePlaylistDetail!!
-                            val plIdx = playlists.indexOfFirst { it.name == pl.name }
+                        } else if (state.activePlaylistDetail != null) {
+                            val pl = state.activePlaylistDetail!!
                             PlaylistDetailView(
                                 playlistName = pl.name,
                                 songs = pl.songs,
-                                currentPlayingList = currentPlaylist,
-                                currentIndex = currentIndex,
-                                isPlaying = isPlaying,
-                                isShuffleEnabled = isShuffleEnabled,
-                                isSearchActive = isPlaylistSearchActive,
-                                searchQuery = playlistSearchQuery,
+                                currentPlayingList = state.currentPlaylist,
+                                currentIndex = state.currentIndex,
+                                isPlaying = state.isPlaying,
+                                isShuffleEnabled = state.isShuffleEnabled,
+                                isSearchActive = state.isPlaylistSearchActive,
+                                searchQuery = state.playlistSearchQuery,
                                 searchFocusRequester = playlistSearchFocusRequester,
-                                onSearchToggle = { isPlaylistSearchActive = it },
-                                onSearchQueryChange = { playlistSearchQuery = it },
-                                onBackClick = { activePlaylistDetail = null },
+                                onSearchToggle = { viewModel.setIsPlaylistSearchActive(it) },
+                                onSearchQueryChange = { viewModel.setPlaylistSearchQuery(it) },
+                                onBackClick = { viewModel.setActivePlaylistDetail(null) },
                                 onAddClick = {
-                                    if (plIdx != -1) {
-                                        activePlaylistForAdding = plIdx
+                                    val existingIdx = state.playlists.indexOfFirst { it.name.equals(pl.name, ignoreCase = true) }
+                                    if (existingIdx != -1) {
+                                        viewModel.showAddToPlaylistDialog(true, pl.name)
                                     } else {
-                                        val existingIdx = playlists.indexOfFirst { it.name.equals(pl.name, ignoreCase = true) }
-                                        if (existingIdx != -1) {
-                                            activePlaylistForAdding = existingIdx
-                                        } else {
-                                            playlists = playlists + Playlist(pl.name, pl.songs)
-                                            activePlaylistForAdding = playlists.size - 1
-                                        }
+                                        viewModel.createPlaylist(pl.name)
+                                        viewModel.showAddToPlaylistDialog(true, pl.name)
                                     }
                                 },
                                 onPlayPlaylist = {
-                                    if (pl.songs.isNotEmpty()) {
-                                        playInList(pl.songs, 0)
-                                    }
+                                    if (pl.songs.isNotEmpty()) viewModel.playInList(pl.songs, 0)
                                 },
-                                onPauseResume = { pauseResume() },
+                                onPauseResume = { viewModel.pauseResume() },
                                 onToggleShuffle = {
-                                    if (pl.songs.isNotEmpty()) {
-                                        currentPlaylist = pl.songs
-                                        val currentSong = activeSongList.getOrNull(currentIndex)
-                                        if (!isShuffleEnabled) {
-                                            isShuffleEnabled = true
-                                            controller?.shuffleModeEnabled = true
-                                            val newQueue = generateShuffleQueue(pl.songs, currentSong)
-                                            shuffleQueue = newQueue
-                                            val newIndex = if (currentSong != null) newQueue.indexOfFirst { it.id == currentSong.id }.coerceAtLeast(0) else 0
-                                            play(newIndex, newQueue)
-                                        } else {
-                                            isShuffleEnabled = false
-                                            controller?.shuffleModeEnabled = false
-                                            shuffleQueue = emptyList()
-                                            val newIndex = if (currentSong != null) pl.songs.indexOfFirst { it.id == currentSong.id }.coerceAtLeast(0) else 0
-                                            play(newIndex, pl.songs)
-                                        }
-                                    }
+                                    viewModel.toggleShuffle()
                                 },
                                 onSelectSong = { songList, index ->
                                     focusManager.clearFocus()
-                                    playInList(songList, index)
-                                    isBigPlayerVisible = true
+                                    viewModel.playInList(songList, index)
+                                    viewModel.setBigPlayerVisible(true)
                                 },
                                 onRemoveSong = { s ->
-                                    val updatedSongs = pl.songs.filter { it.id != s.id }
-                                    val updatedPlaylist = pl.copy(songs = updatedSongs)
-                                    if (plIdx != -1) {
-                                        val updatedList = playlists.toMutableList()
-                                        updatedList[plIdx] = updatedPlaylist
-                                        playlists = updatedList
-                                    }
-                                    activePlaylistDetail = updatedPlaylist
+                                    viewModel.removeSongFromPlaylist(pl.name, s.id)
                                 },
                                 onAddToOtherPlaylist = { s ->
-                                    currentIndex = activeSongList.indexOfFirst { it.id == s.id }
-                                    showAddToPlaylistDialog = true
+                                    viewModel.setTrackMenuSong(s)
+                                    viewModel.showAddToPlaylistDialog(true)
                                 },
                                 currentSongId = currentSongId
                             )
-                        } else if (selectedTab == 0) {
-                            val displaySongs = if (isSearchActive) searchResults else localSongs
-                            val currentSongId = remember(currentIndex, currentPlaylist, isShuffleEnabled, shuffleQueue) { 
-                                activeSongList.getOrNull(currentIndex)?.id ?: controller?.currentMediaItem?.mediaId?.toLongOrNull() 
-                            }
+                        } else if (state.selectedTab == 0) {
+                            val displaySongs = if (state.isSearchActive) state.searchResults else state.localSongs
                             TrackLibraryList(
                                 songs = displaySongs,
                                 currentSongId = currentSongId,
-                                openMenuFor = trackMenuSong,
+                                openMenuFor = state.trackMenuSong,
                                 onSelectSong = { song ->
                                     focusManager.clearFocus()
                                     val targetIdx = displaySongs.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
-                                    playInList(displaySongs, targetIdx)
-                                    isBigPlayerVisible = true
+                                    viewModel.playInList(displaySongs, targetIdx)
+                                    viewModel.setBigPlayerVisible(true)
                                 },
-                                onOpenMenu = { trackMenuSong = it },
+                                onOpenMenu = { viewModel.setTrackMenuSong(it) },
                                 onAddToPlaylist = { song ->
-                                    currentIndex = displaySongs.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
-                                    showAddToPlaylistDialog = true
+                                    viewModel.setTrackMenuSong(song)
+                                    viewModel.showAddToPlaylistDialog(true)
                                 },
                                 onDeleteSong = { song ->
-                                    songToDelete = song
-                                    showDeleteConfirmationDialog = true
+                                    viewModel.setSongToDelete(song, showDialog = true)
                                 }
                             )
                         } else {
                             PlaylistLibraryList(
-                                playlists = playlists,
-                                localSongs = localSongs,
-                                currentPlaylist = currentPlaylist,
-                                isPlaying = isPlaying,
-                                openMenuFor = playlistMenuName,
-                                onOpenPlaylist = { activePlaylistDetail = it },
-                                onOpenMenu = { playlistMenuName = it },
-                                onDeletePlaylist = {
-                                    playlistToDelete = it
-                                    showDeletePlaylistConfirmationDialog = true
+                                playlists = state.playlists,
+                                localSongs = state.localSongs,
+                                currentPlaylist = state.currentPlaylist,
+                                isPlaying = state.isPlaying,
+                                openMenuFor = state.playlistMenuName,
+                                onOpenPlaylist = { viewModel.setActivePlaylistDetail(it) },
+                                onOpenMenu = { _ -> },
+                                onDeletePlaylist = { name ->
+                                    viewModel.setPlaylistToDelete(name, showDialog = true)
                                 }
                             )
                         }
                     }
                 }
 
-                // Mini-player and bottom tabs stay anchored below the scrollable library.
                 Box(Modifier.fillMaxWidth()) {
                     Column {
-                        AnimatedVisibility(visible = currentIndex != -1) {
-                            val song = activeSongList.getOrNull(currentIndex)
-                            Row(Modifier.fillMaxWidth().background(Color(0xFF111111)).clickable { isBigPlayerVisible = true }.padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Column(Modifier.weight(1f)) { Text(text = song?.title ?: "", color = Color.White, fontFamily = FontFamily.Monospace, fontSize = 14.sp, maxLines = 1); Text(song?.artist ?: "", color = Color.Gray, fontSize = 11.sp, maxLines = 1) }
-                                IconButton(onClick = { prev() }, modifier = Modifier.size(48.dp)) { Icon(Icons.Filled.SkipPrevious, contentDescription = "Prev", tint = Color.White, modifier = Modifier.size(26.dp)) }
-                                IconButton(onClick = { pauseResume() }, modifier = Modifier.size(48.dp)) { Icon(if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, contentDescription = "Play/Pause", tint = NothingRed, modifier = Modifier.size(26.dp)) }
-                                IconButton(onClick = { next() }, modifier = Modifier.size(48.dp)) { Icon(Icons.Filled.SkipNext, contentDescription = "Next", tint = Color.White, modifier = Modifier.size(26.dp)) }
+                        AnimatedVisibility(visible = state.currentIndex != -1) {
+                            val song = state.activeSongList.getOrNull(state.currentIndex)
+                            Row(
+                                Modifier.fillMaxWidth().background(Color(0xFF111111)).clickable { viewModel.setBigPlayerVisible(true) }.padding(horizontal = 16.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(text = song?.title ?: "", color = Color.White, fontFamily = FontFamily.Monospace, fontSize = 14.sp, maxLines = 1)
+                                    Text(song?.artist ?: "", color = Color.Gray, fontSize = 11.sp, maxLines = 1)
+                                }
+                                IconButton(onClick = { viewModel.prev() }, modifier = Modifier.size(48.dp)) {
+                                    Icon(Icons.Filled.SkipPrevious, contentDescription = "Prev", tint = Color.White, modifier = Modifier.size(26.dp))
+                                }
+                                IconButton(onClick = { viewModel.pauseResume() }, modifier = Modifier.size(48.dp)) {
+                                    Icon(if (state.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, contentDescription = "Play/Pause", tint = NothingRed, modifier = Modifier.size(26.dp))
+                                }
+                                IconButton(onClick = { viewModel.next() }, modifier = Modifier.size(48.dp)) {
+                                    Icon(Icons.Filled.SkipNext, contentDescription = "Next", tint = Color.White, modifier = Modifier.size(26.dp))
+                                }
                             }
                         }
                         Row(modifier = Modifier.fillMaxWidth().background(Color(0xFF080808)).padding(vertical = 12.dp), horizontalArrangement = Arrangement.SpaceAround, verticalAlignment = Alignment.CenterVertically) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f).clickable { selectedTab = 0; activePlaylistDetail = null; activePlaylistForAdding = null }) { Text(text = "TRACKS", color = if (selectedTab == 0 && activePlaylistDetail == null) NothingRed else Color.Gray, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Normal, fontSize = 13.sp, letterSpacing = 3.sp); Spacer(Modifier.height(4.dp)); Box(Modifier.size(4.dp).background(if (selectedTab == 0 && activePlaylistDetail == null) NothingRed else Color.Transparent, CircleShape)) }
+                            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f).clickable { viewModel.setSelectedTab(0); viewModel.setActivePlaylistDetail(null); viewModel.showAddToPlaylistDialog(false) }) {
+                                Text(text = "TRACKS", color = if (state.selectedTab == 0 && state.activePlaylistDetail == null) NothingRed else Color.Gray, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Normal, fontSize = 13.sp, letterSpacing = 3.sp)
+                                Spacer(Modifier.height(4.dp))
+                                Box(Modifier.size(4.dp).background(if (state.selectedTab == 0 && state.activePlaylistDetail == null) NothingRed else Color.Transparent, CircleShape))
+                            }
                             Box(modifier = Modifier.width(1.dp).height(20.dp).background(Color(0xFF222222)))
-                            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f).clickable { selectedTab = 1; activePlaylistDetail = null; activePlaylistForAdding = null }) { Text(text = "PLAYLISTS", color = if (selectedTab == 1 || activePlaylistDetail != null) NothingRed else Color.Gray, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Normal, fontSize = 13.sp, letterSpacing = 3.sp); Spacer(Modifier.height(4.dp)); Box(Modifier.size(4.dp).background(if (selectedTab == 1 || activePlaylistDetail != null) NothingRed else Color.Transparent, CircleShape)) }
+                            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f).clickable { viewModel.setSelectedTab(1); viewModel.setActivePlaylistDetail(null); viewModel.showAddToPlaylistDialog(false) }) {
+                                Text(text = "PLAYLISTS", color = if (state.selectedTab == 1 || state.activePlaylistDetail != null) NothingRed else Color.Gray, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Normal, fontSize = 13.sp, letterSpacing = 3.sp)
+                                Spacer(Modifier.height(4.dp))
+                                Box(Modifier.size(4.dp).background(if (state.selectedTab == 1 || state.activePlaylistDetail != null) NothingRed else Color.Transparent, CircleShape))
+                            }
                         }
                     }
                 }
             }
-            // Modal dialogs are rendered above the library and report actions through callbacks.
-            if (showCreatePlaylistDialog) {
+
+            if (state.showCreatePlaylistDialog) {
                 CreatePlaylistDialog(
-                    newPlaylistName = newPlaylistName,
-                    onNameChange = { newPlaylistName = it },
-                    onDismiss = { showCreatePlaylistDialog = false; newPlaylistName = "" },
-                    onCreate = { name ->
-                        playlists = playlists + Playlist(name, emptyList())
-                        newPlaylistName = ""
-                        showCreatePlaylistDialog = false
-                    }
+                    newPlaylistName = state.newPlaylistName,
+                    onNameChange = { viewModel.setNewPlaylistName(it) },
+                    onDismiss = { viewModel.showCreatePlaylistDialog(false); viewModel.setNewPlaylistName("") },
+                    onCreate = { name -> viewModel.createPlaylist(name) }
                 )
             }
-            if (showAddToPlaylistDialog) {
-                val currentSong = activeSongList.getOrNull(currentIndex)
+            if (state.showAddToPlaylistDialog) {
+                val currentSong = state.activeSongList.getOrNull(state.currentIndex) ?: state.trackMenuSong
                 AddToPlaylistDialog(
                     currentSong = currentSong,
-                    playlists = playlists,
-                    onDismiss = { showAddToPlaylistDialog = false },
+                    playlists = state.playlists,
+                    onDismiss = { viewModel.showAddToPlaylistDialog(false) },
                     onAddToPlaylist = { idx ->
                         if (currentSong != null) {
-                            val targetPl = playlists[idx]
-                            val isAlreadyIn = targetPl.songs.any { it.id == currentSong.id }
-                            if (!isAlreadyIn) {
-                                val updated = playlists.toMutableList()
-                                updated[idx] = targetPl.copy(songs = targetPl.songs + currentSong)
-                                playlists = updated
+                            val targetPl = state.playlists.getOrNull(idx)
+                            if (targetPl != null) {
+                                viewModel.addSongToPlaylist(targetPl.name, currentSong)
                             }
                         }
-                        showAddToPlaylistDialog = false
+                        viewModel.showAddToPlaylistDialog(false)
                     },
                     onCreateNewClick = {
-                        showAddToPlaylistDialog = false
-                        showCreatePlaylistDialog = true
+                        viewModel.showAddToPlaylistDialog(false)
+                        viewModel.showCreatePlaylistDialog(true)
                     }
                 )
             }
-            if (showDeleteConfirmationDialog && songToDelete != null) {
+            if (state.showDeleteConfirmationDialog && state.songToDelete != null) {
                 DeleteSongConfirmationDialog(
-                    song = songToDelete,
-                    onDismiss = {
-                        showDeleteConfirmationDialog = false
-                        songToDelete = null
-                    },
-                    onConfirmDelete = { song ->
-                        showDeleteConfirmationDialog = false
-                        deleteSongFromDevice(song)
-                    }
+                    song = state.songToDelete!!,
+                    onDismiss = { viewModel.setSongToDelete(null, showDialog = false) },
+                    onConfirmDelete = { song -> deleteSongFromDevice(song) }
                 )
             }
-            if (showDeletePlaylistConfirmationDialog && playlistToDelete != null) {
+            if (state.showDeletePlaylistConfirmationDialog && state.playlistToDelete != null) {
                 DeletePlaylistConfirmationDialog(
-                    playlistName = playlistToDelete,
-                    onDismiss = {
-                        showDeletePlaylistConfirmationDialog = false
-                        playlistToDelete = null
-                    },
-                    onConfirmDelete = { name ->
-                        showDeletePlaylistConfirmationDialog = false
-                        playlists = playlists.filter { it.name != name }
-                        if (activePlaylistDetail?.name == name) {
-                            activePlaylistDetail = null
-                        }
-                        playlistToDelete = null
-                    }
+                    playlistName = state.playlistToDelete!!,
+                    onDismiss = { viewModel.setPlaylistToDelete(null, showDialog = false) },
+                    onConfirmDelete = { name -> viewModel.deletePlaylist(name) }
                 )
             }
-            // Full-screen player overlay receives state and sends user actions to the activity.
-            AnimatedVisibility(visible = isBigPlayerVisible, enter = slideInVertically(initialOffsetY = { it }), exit = slideOutVertically(targetOffsetY = { it })) {
+
+            AnimatedVisibility(visible = state.isBigPlayerVisible, enter = slideInVertically(initialOffsetY = { it }), exit = slideOutVertically(targetOffsetY = { it })) {
                 BigPlayer(
-                    songs = activeSongList,
-                    currentIndex = currentIndex,
-                    isPlaying = isPlaying,
-                    currentPosition = currentPosition,
-                    duration = duration,
-                    onClose = { isBigPlayerVisible = false },
-                    onPlayPause = { pauseResume() },
-                    onNext = { next() },
-                    onPrev = { prev() },
-                    onSeek = { pos -> currentPosition = pos; controller?.seekTo(pos) },
-                    onDragging = { dragging, moved -> if (dragging) { if (!isDragging) wasPlayingBeforeDrag = isPlaying; isDragging = true; if (isPlaying) controller?.pause() } else { isDragging = false; if (moved || wasPlayingBeforeDrag) controller?.play() } },
-                    onSeekToSong = { index -> if (index != currentIndex) play(index) },
-                    isShuffleEnabled = isShuffleEnabled,
-                    onToggleShuffle = { enable ->
-                        val currentSong = activeSongList.getOrNull(currentIndex)
-                        isShuffleEnabled = enable
-                        controller?.shuffleModeEnabled = enable
-                        val newList = if (enable) {
-                            val newQueue = generateShuffleQueue(currentPlaylist, currentSong)
-                            shuffleQueue = newQueue
-                            newQueue
+                    songs = state.activeSongList,
+                    currentIndex = state.currentIndex,
+                    isPlaying = state.isPlaying,
+                    currentPosition = state.currentPosition,
+                    duration = state.duration,
+                    onClose = { viewModel.setBigPlayerVisible(false) },
+                    onPlayPause = { viewModel.pauseResume() },
+                    onNext = { viewModel.next() },
+                    onPrev = { viewModel.prev() },
+                    onSeek = { pos -> viewModel.seekTo(pos) },
+                    onDragging = { dragging, moved ->
+                        if (dragging) {
+                            if (!state.isDragging) viewModel.setDragging(true, wasPlaying = state.isPlaying)
+                            if (state.isPlaying) controller?.pause()
                         } else {
-                            shuffleQueue = emptyList()
-                            currentPlaylist
+                            viewModel.setDragging(false)
+                            if (moved || state.wasPlayingBeforeDrag) controller?.play()
                         }
-                        if (newList.isNotEmpty()) {
-                            val newIndex = if (currentSong != null) newList.indexOfFirst { it.id == currentSong.id }.coerceAtLeast(0) else 0
-                            currentIndex = newIndex
-                            controller?.setMediaItems(newList.map { it.toMediaItem() }, newIndex, currentPosition)
-                        }
-                    }
+                    },
+                    onSeekToSong = { index -> if (index != state.currentIndex) viewModel.play(index) },
+                    isShuffleEnabled = state.isShuffleEnabled,
+                    onToggleShuffle = { _ -> viewModel.toggleShuffle() }
                 )
             }
         }
     }
 
-    // Checks the Android-version-specific permission required to read audio files.
     private fun hasPermissions(): Boolean = if (Build.VERSION.SDK_INT >= 33) {
         ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_AUDIO) == PackageManager.PERMISSION_GRANTED
     } else {
         ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
     }
 
-    // Returns only the runtime permissions relevant to the current Android version.
     private fun requiredPermissions(): Array<String> = if (Build.VERSION.SDK_INT >= 33) {
         arrayOf(Manifest.permission.READ_MEDIA_AUDIO, Manifest.permission.POST_NOTIFICATIONS)
     } else {

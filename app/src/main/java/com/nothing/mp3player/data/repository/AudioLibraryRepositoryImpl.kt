@@ -1,23 +1,24 @@
-package com.nothing.mp3player.data
+package com.nothing.mp3player.data.repository
 
 import android.content.ContentUris
 import android.content.Context
 import android.net.Uri
 import android.os.Environment
 import android.provider.MediaStore
+import com.nothing.mp3player.domain.repository.AudioLibraryRepository
 import com.nothing.mp3player.model.Song
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
-/** Loads audio tracks from Android's media library and the app's music folder. */
-class AudioLibraryRepository(private val context: Context) {
-    /** Combines indexed device music with supported files in the app-owned music folder. */
-    fun loadSongs(): List<Song> {
+class AudioLibraryRepositoryImpl(private val context: Context) : AudioLibraryRepository {
+
+    override suspend fun loadSongs(): List<Song> = withContext(Dispatchers.IO) {
         val songs = mutableListOf<Song>()
-        loadAppOwnedMusic().forEach { songs.add(it) }
-        loadIndexedMusic().forEach { songs.add(it) }
-        return songs
+        songs.addAll(loadAppOwnedMusic())
+        songs.addAll(loadIndexedMusic())
+        songs
     }
 
-    /** Finds local files copied into this app's private music directory. */
     private fun loadAppOwnedMusic(): List<Song> = buildList {
         context.getExternalFilesDir(Environment.DIRECTORY_MUSIC)?.listFiles()?.forEach { file ->
             val supported = file.isFile && file.extension.lowercase() in SUPPORTED_EXTENSIONS
@@ -36,7 +37,6 @@ class AudioLibraryRepository(private val context: Context) {
         }
     }
 
-    /** Queries Android MediaStore for music that is visible to the app. */
     private fun loadIndexedMusic(): List<Song> {
         val projection = arrayOf(
             MediaStore.Audio.Media._ID,
